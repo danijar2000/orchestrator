@@ -1,0 +1,5 @@
+bin/
+output/
+*.db*
+web/node_modules/
+web/dist/
