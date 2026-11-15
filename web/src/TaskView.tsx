@@ -7,7 +7,7 @@ import {
 import { DndContext, closestCenter, type DragEndEvent } from '@dnd-kit/core'
 import { SortableContext, arrayMove, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { api, fmtDur, lastScore, qc, stepTime, statusRu, useEvents, useTask, type Step, type Task } from './api'
+import { api, fmtDur, lastScore, qc, stepTime, statusRu, useEvents, useTask, type Step, type Task, fmtCost } from './api'
 import { Badge, Bar } from './App'
 
 const btn = 'px-3 py-1 rounded text-sm bg-zinc-800 hover:bg-zinc-700'
@@ -71,6 +71,7 @@ const columns = [
   col.accessor((s) => lastScore(s) ?? -1, { id: 'score', header: 'Оценка', cell: (c) => c.getValue() < 0 ? '—' : `${c.getValue()}/10` }),
   col.accessor((s) => stepTime(s), { id: 'time', header: 'Время', cell: (c) => c.getValue() ? fmtDur(c.getValue()) : '—' }),
   col.accessor((s) => s.attempts.reduce((a, x) => a + x.tokens, 0), { id: 'tokens', header: 'Токены' }),
+  col.accessor((s) => s.attempts.reduce((a, x) => a + (x.cost ?? 0), 0), { id: 'cost', header: 'Цена', cell: (c) => fmtCost(c.getValue()) }),
 ]
 
 function StepsTable({ t, sel, onSel }: { t: Task; sel: string; onSel: (id: string) => void }) {
@@ -187,10 +188,12 @@ function Stats({ t }: { t: Task }) {
   const card = (l: string, v: string) => <div className="bg-zinc-900 rounded p-3"><div className="text-xs text-zinc-500">{l}</div><div className="text-xl">{v}</div></div>
   return (
     <div className="space-y-6">
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
         {card('Прогресс', `${Math.round(t.progress * 100)}%`)}
         {card('Время работы', fmtDur(total))}
-        {card('Токенов', tokens.toLocaleString())}
+        {card('Токенов', t.tokens_out ? `${(t.tokens_in ?? 0).toLocaleString()} → ${t.tokens_out.toLocaleString()}` : tokens.toLocaleString())}
+        {card('Стоимость', fmtCost(t.cost ?? 0))}
+        {card('Профиль', t.profile || '—')}
         {card('Раунд доработки', `${t.round}`)}
       </div>
       <Chart option={scores} />
@@ -258,7 +261,7 @@ function StepDetail({ t, s, onClose }: { t: Task; s: Step; onClose: () => void }
               <b>Проверка {a.review.score}/10:</b> {a.review.feedback}
             </div>
           )}
-          <div className="text-xs text-zinc-500">{a.tokens} токенов · {a.tps.toFixed(1)} ток/с · {fmtDur((Date.parse(a.finished) - Date.parse(a.started)) / 1000)}</div>
+          <div className="text-xs text-zinc-500">{(a.tokens_in ?? 0).toLocaleString()} → {a.tokens} токенов · {fmtCost(a.cost ?? 0)} · {a.tps.toFixed(1)} ток/с · {fmtDur((Date.parse(a.finished) - Date.parse(a.started)) / 1000)}</div>
           <div className="prose prose-invert prose-sm max-w-none text-sm leading-relaxed [&_pre]:bg-zinc-900 [&_pre]:p-3 [&_pre]:rounded [&_pre]:overflow-auto [&_h1]:text-lg [&_h2]:text-base [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:my-2">
             <Markdown>{a.output}</Markdown>
           </div>

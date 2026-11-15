@@ -3,3 +3,4 @@ output/
 *.db*
 web/node_modules/
 web/dist/
+profiles.json

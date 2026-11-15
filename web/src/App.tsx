@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { api, qc, statusColor, statusRu, useAgent, useLive, useTasks } from './api'
+import { api, fmtCost, qc, statusColor, statusRu, useAgent, useLive, useTasks } from './api'
 import TaskView from './TaskView'
 
 export function Badge({ s }: { s: string }) {
@@ -17,7 +17,7 @@ function AgentStatus() {
   return (
     <div className="flex flex-wrap gap-4 text-sm text-zinc-400">
       <span>{dot(!!online)} агент {a?.host || '—'}</span>
-      <span>{dot(a?.ollama)} Ollama</span>
+      <span>{dot(a?.ollama)} API</span>
       <span>{dot(a?.awake)} {a?.awake ? 'сон запрещён' : 'сон разрешён'}</span>
       {a?.models && <span>план: {a.models.planner} · работа: {a.models.worker} · проверка: {a.models.reviewer}</span>}
       {!!a?.tps && <span>{a.tps.toFixed(1)} ток/с</span>}
@@ -27,9 +27,12 @@ function AgentStatus() {
 
 function NewTask({ onCreated }: { onCreated: (id: string) => void }) {
   const [goal, setGoal] = useState('')
+  const [profile, setProfile] = useState(localStorage.profile ?? '')
+  const { data: a } = useAgent()
   const submit = async () => {
     if (!goal.trim()) return
-    const t = await api.createTask(goal.trim())
+    localStorage.profile = profile
+    const t = await api.createTask(goal.trim(), profile)
     setGoal('')
     qc.invalidateQueries({ queryKey: ['tasks'] })
     onCreated(t.id)
@@ -39,6 +42,13 @@ function NewTask({ onCreated }: { onCreated: (id: string) => void }) {
       <textarea value={goal} onChange={(e) => setGoal(e.target.value)} rows={3} placeholder="Новая главная задача…"
         className="w-full bg-zinc-900 border border-zinc-800 rounded p-2 text-sm outline-none focus:border-sky-600"
         onKeyDown={(e) => e.key === 'Enter' && e.metaKey && submit()} />
+      {!!a?.profiles?.length && (
+        <select value={profile} onChange={(e) => setProfile(e.target.value)}
+          className="w-full bg-zinc-900 border border-zinc-800 rounded p-1.5 text-sm">
+          <option value="">профиль по умолчанию ({a.profiles[0]})</option>
+          {a.profiles.map((p) => <option key={p} value={p}>{p}</option>)}
+        </select>
+      )}
       <button onClick={submit} className="w-full bg-sky-600 hover:bg-sky-500 rounded py-1.5 text-sm">Поставить в очередь (⌘↵)</button>
     </div>
   )
@@ -65,7 +75,9 @@ export default function App() {
               <button key={t.id} onClick={() => setSel(t.id)}
                 className={`w-full text-left p-3 border-b border-zinc-900 space-y-1.5 hover:bg-zinc-900 ${sel === t.id ? 'bg-zinc-900' : ''}`}>
                 <div className="text-sm line-clamp-2">{t.goal}</div>
-                <div className="flex items-center gap-2"><Badge s={t.status} /><span className="text-xs text-zinc-500">{Math.round(t.progress * 100)}%</span></div>
+                <div className="flex items-center gap-2"><Badge s={t.status} /><span className="text-xs text-zinc-500">{Math.round(t.progress * 100)}%</span>
+                  {t.profile && <span className="text-xs text-zinc-500">{t.profile}</span>}
+                  {!!t.cost && <span className="text-xs text-zinc-500">{fmtCost(t.cost)}</span>}</div>
                 <Bar v={t.progress} />
               </button>
             ))}

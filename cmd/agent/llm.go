@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -14,68 +16,102 @@ import (
 
 type result struct {
 	Text   string
-	Tokens int
+	Tokens int // выходные
+	In     int // входные
+	Cost   float64
 	TPS    float64
 }
 
-var noThink = map[string]bool{}
+// модели, которые не приняли json_schema: дальше просим json_object и кладём схему в промпт
+var plainJSON = map[string]bool{}
 
 type msg = map[string]string
 
-func chat(ctx context.Context, mdl, system, user string, schema any) (result, error) {
-	return chatMsgs(ctx, mdl, []msg{{"role": "system", "content": system}, {"role": "user", "content": user}}, schema)
+func chat(ctx context.Context, role Role, system, user string, schema any) (result, error) {
+	return chatMsgs(ctx, role, []msg{{"role": "system", "content": system}, {"role": "user", "content": user}}, schema)
 }
 
-func chatMsgs(ctx context.Context, mdl string, msgs []msg, schema any) (result, error) {
-	body := map[string]any{
-		"model":    mdl,
-		"stream":   false,
-		"messages": msgs,
-		"options":  map[string]any{"num_ctx": *numCtx, "num_predict": predict(schema)},
+func chatMsgs(ctx context.Context, role Role, msgs []msg, schema any) (result, error) {
+	body := map[string]any{}
+	for k, v := range role.Extra {
+		body[k] = v
 	}
+	body["model"] = role.Model
+	body["messages"] = msgs
+	body["max_tokens"] = predict(schema)
+	key := role.URL + role.Model
 	if schema != nil {
-		body["format"] = schema
-	}
-	if !noThink[mdl] {
-		body["think"] = *think
+		if role.JSON == "object" || plainJSON[key] {
+			sc, _ := json.Marshal(schema)
+			m := append([]msg{}, msgs...)
+			m[0] = msg{"role": m[0]["role"], "content": m[0]["content"] + "\n\nОтвечай только JSON по схеме:\n" + string(sc)}
+			body["messages"] = m
+			body["response_format"] = map[string]any{"type": "json_object"}
+		} else {
+			body["response_format"] = map[string]any{"type": "json_schema", "json_schema": map[string]any{"name": "out", "schema": schema}}
+		}
 	}
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Minute)
 	defer cancel()
 	b, _ := json.Marshal(body)
-	req, _ := http.NewRequestWithContext(ctx, "POST", *ollama+"/api/chat", bytes.NewReader(b))
+	req, _ := http.NewRequestWithContext(ctx, "POST", strings.TrimRight(role.URL, "/")+"/chat/completions", bytes.NewReader(b))
+	req.Header.Set("Content-Type", "application/json")
+	if k := os.Getenv(role.KeyEnv); role.KeyEnv != "" && k != "" {
+		req.Header.Set("Authorization", "Bearer "+k)
+	}
+	t0 := time.Now()
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return result{}, err
 	}
 	defer res.Body.Close()
+	raw, _ := io.ReadAll(res.Body)
 	var out struct {
-		Message      struct{ Content string }
-		EvalCount    int   `json:"eval_count"`
-		EvalDuration int64 `json:"eval_duration"`
-		Error        string
-	}
-	json.NewDecoder(res.Body).Decode(&out)
-	if out.Error != "" {
-		if strings.Contains(out.Error, "think") && !noThink[mdl] {
-			noThink[mdl] = true
-			return chatMsgs(ctx, mdl, msgs, schema)
+		Choices []struct {
+			Message struct{ Content string }
 		}
-		return result{}, fmt.Errorf("%s", out.Error)
+		Usage struct {
+			Prompt     int      `json:"prompt_tokens"`
+			Completion int      `json:"completion_tokens"`
+			Cost       *float64 // OpenRouter отдаёт реальную цену
+		}
 	}
-	r := result{Text: clean(out.Message.Content, schema != nil), Tokens: out.EvalCount}
-	if out.EvalDuration > 0 {
-		r.TPS = float64(out.EvalCount) / (float64(out.EvalDuration) / 1e9)
-		tmu.Lock()
-		lastTPS = r.TPS
-		tmu.Unlock()
+	json.Unmarshal(raw, &out)
+	if res.StatusCode >= 300 || len(out.Choices) == 0 {
+		if schema != nil && !plainJSON[key] && res.StatusCode == 400 && strings.Contains(strings.ToLower(string(raw)), "response_format") {
+			plainJSON[key] = true
+			return chatMsgs(ctx, role, msgs, schema)
+		}
+		return result{}, fmt.Errorf("%s %s: %s", role.Model, res.Status, cut(string(raw), 500))
 	}
+	r := result{Text: clean(out.Choices[0].Message.Content, schema != nil), Tokens: out.Usage.Completion, In: out.Usage.Prompt}
+	r.Cost = role.cost(r.In, r.Tokens)
+	if out.Usage.Cost != nil {
+		r.Cost = *out.Usage.Cost
+	}
+	if d := time.Since(t0).Seconds(); d > 0 && r.Tokens > 0 {
+		r.TPS = float64(r.Tokens) / d
+	}
+	spend(r)
 	return r, nil
 }
 
-func chatJSON(ctx context.Context, mdl, system, user string, schema, out any) error {
+// общий счёт задачи: все вызовы моделей, включая план и проверки
+func spend(r result) {
+	update(func(t *model.Task) {
+		t.TokensIn += r.In
+		t.TokensOut += r.Tokens
+		t.Cost += r.Cost
+	})
+	tmu.Lock()
+	lastTPS = r.TPS
+	tmu.Unlock()
+}
+
+func chatJSON(ctx context.Context, role Role, system, user string, schema, out any) error {
 	var last error
 	for range 3 {
-		r, err := chat(ctx, mdl, system, user, schema)
+		r, err := chat(ctx, role, system, user, schema)
 		if err != nil {
 			return err
 		}
@@ -100,7 +136,7 @@ const workerSystem = "Ты исполнитель. Выполни ровно О�
 
 func plan(ctx context.Context, goal string) ([]model.Step, error) {
 	var out struct{ Steps []model.Step }
-	err := chatJSON(ctx, *planner,
+	err := chatJSON(ctx, prof.Planner,
 		"Ты планировщик. Разбей большую задачу на 3–12 небольших последовательных шагов. Каждый шаг должен выполняться одним ответом языковой модели. Для каждого шага дай чёткий проверяемый критерий готовности и вес сложности 1–5. Пиши на языке задачи.",
 		"ЗАДАЧА:\n"+goal, obj(map[string]any{"steps": stepList}, "steps"), &out)
 	if err != nil || len(out.Steps) == 0 {
@@ -183,7 +219,7 @@ func workerPrompt(s model.Step, feedback string) string {
 
 func review(ctx context.Context, s model.Step, output string) (*model.Review, error) {
 	var r model.Review
-	err := chatJSON(ctx, *reviewer,
+	err := chatJSON(ctx, prof.Reviewer,
 		"Ты строгий проверяющий. Оцени, выполнен ли шаг по критерию готовности. score 0–10. passed=true только если критерий выполнен полностью. В feedback кратко и конкретно: что не так и как исправить. Если есть журнал действий, верь только реальному выводу команд, а не словам исполнителя. Пиши на языке задачи.",
 		fmt.Sprintf("ГЛАВНАЯ ЦЕЛЬ:\n%s\n\nШАГ: %s\nКРИТЕРИЙ: %s\n\nРЕЗУЛЬТАТ:\n%s", cur.Goal, s.Title, s.Criteria, squeeze(output)),
 		obj(map[string]any{"passed": map[string]any{"type": "boolean"}, "score": num, "feedback": str}, "passed", "score", "feedback"), &r)
@@ -205,7 +241,7 @@ func finalCheck(ctx context.Context) bool {
 		Summary string
 		Missing []model.Step
 	}
-	err := chatJSON(ctx, *reviewer,
+	err := chatJSON(ctx, prof.Reviewer,
 		"Ты проверяешь, достигнута ли главная цель целиком. Дай score 0–10 и краткий summary итога. Если чего-то важного не хватает, перечисли недостающие шаги в missing (иначе пустой список). Пиши на языке задачи.",
 		fmt.Sprintf("ГЛАВНАЯ ЦЕЛЬ:\n%s\n\nПЛАН:\n%s\nРЕЗУЛЬТАТЫ:\n%s", cur.Goal, overview(), doneOutputs(20, 800)),
 		obj(map[string]any{"score": num, "summary": str, "missing": stepList}, "score", "summary", "missing"), &out)

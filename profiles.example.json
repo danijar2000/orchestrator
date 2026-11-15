@@ -1,0 +1,22 @@
+[
+  {
+    "name": "local",
+    "harness": "builtin",
+    "planner":  {"url": "http://localhost:11434/v1", "model": "qwen3-abl-14b-16k", "extra": {"reasoning_effort": "none"}},
+    "worker":   {"url": "http://localhost:11434/v1", "model": "qwen3-abl-14b-16k", "extra": {"reasoning_effort": "none"}},
+    "reviewer": {"url": "http://localhost:11434/v1", "model": "qwen3-abl-14b-16k", "extra": {"reasoning_effort": "none"}},
+    "harness_url": "http://localhost:11434"
+  },
+  {
+    "name": "runpod-vllm",
+    "planner":  {"url": "https://POD_ID-8000.proxy.runpod.net/v1", "key_env": "RUNPOD_VLLM_KEY", "model": "MODEL"},
+    "worker":   {"url": "https://POD_ID-8000.proxy.runpod.net/v1", "key_env": "RUNPOD_VLLM_KEY", "model": "MODEL"},
+    "reviewer": {"url": "https://POD_ID-8000.proxy.runpod.net/v1", "key_env": "RUNPOD_VLLM_KEY", "model": "MODEL"}
+  },
+  {
+    "name": "openrouter",
+    "planner":  {"url": "https://openrouter.ai/api/v1", "key_env": "OPENROUTER_API_KEY", "model": "MODEL", "extra": {"usage": {"include": true}, "provider": {"data_collection": "deny"}}},
+    "worker":   {"url": "https://openrouter.ai/api/v1", "key_env": "OPENROUTER_API_KEY", "model": "MODEL", "extra": {"usage": {"include": true}, "provider": {"data_collection": "deny"}}},
+    "reviewer": {"url": "https://openrouter.ai/api/v1", "key_env": "OPENROUTER_API_KEY", "model": "MODEL", "extra": {"usage": {"include": true}, "provider": {"data_collection": "deny"}}}
+  }
+]

@@ -141,13 +141,13 @@ func listTasks(w http.ResponseWriter, r *http.Request) {
 }
 
 func createTask(w http.ResponseWriter, r *http.Request) {
-	var in struct{ Goal string }
+	var in struct{ Goal, Profile string }
 	if json.NewDecoder(r.Body).Decode(&in) != nil || in.Goal == "" {
 		http.Error(w, "goal required", 400)
 		return
 	}
 	now := time.Now()
-	t := &model.Task{ID: fmt.Sprintf("t%d", now.UnixMilli()), Goal: in.Goal, Status: "queued", Steps: []model.Step{}, Created: now, Updated: now}
+	t := &model.Task{ID: fmt.Sprintf("t%d", now.UnixMilli()), Goal: in.Goal, Profile: in.Profile, Status: "queued", Steps: []model.Step{}, Created: now, Updated: now}
 	must2(w, saveTask(t))
 	broadcast("task", t.ID)
 	js(w, t)

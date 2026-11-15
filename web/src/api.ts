@@ -2,14 +2,15 @@ import { QueryClient, useQuery } from '@tanstack/react-query'
 import { useEffect } from 'react'
 
 export type Review = { passed: boolean; score: number; feedback: string }
-export type Attempt = { n: number; output: string; review?: Review; started: string; finished: string; tokens: number; tps: number }
+export type Attempt = { n: number; output: string; review?: Review; started: string; finished: string; tokens: number; tokens_in: number; cost: number; tps: number }
 export type Step = { id: string; title: string; criteria: string; weight: number; status: string; attempts: Attempt[] }
 export type Task = {
   id: string; goal: string; status: string; progress: number; score: number; summary: string
   round: number; steps: Step[]; created: string; updated: string
+  profile: string; models?: Record<string, string>; tokens_in: number; tokens_out: number; cost: number
 }
 export type Event = { id: number; task_id: string; step_id?: string; ts: string; kind: string; msg: string }
-export type Agent = { host: string; awake: boolean; ollama: boolean; models: Record<string, string>; task_id: string; tps: number; seen: string }
+export type Agent = { host: string; awake: boolean; ollama: boolean; models: Record<string, string>; profiles?: string[]; task_id: string; tps: number; seen: string }
 
 export const qc = new QueryClient()
 
@@ -21,7 +22,7 @@ async function req<T>(method: string, url: string, body?: unknown): Promise<T> {
 }
 
 export const api = {
-  createTask: (goal: string) => req<Task>('POST', '/api/tasks', { goal }),
+  createTask: (goal: string, profile: string) => req<Task>('POST', '/api/tasks', { goal, profile }),
   deleteTask: (id: string) => req('DELETE', `/api/tasks/${id}`),
   command: (id: string, kind: string, extra: { step_id?: string; order?: string[] } = {}) =>
     req('POST', `/api/tasks/${id}/commands`, { kind, ...extra }),
@@ -57,3 +58,4 @@ export const statusRu: Record<string, string> = {
 export const lastScore = (s: Step) => s.attempts.at(-1)?.review?.score
 export const stepTime = (s: Step) => s.attempts.reduce((a, x) => a + (Date.parse(x.finished) - Date.parse(x.started)) / 1000, 0)
 export const fmtDur = (sec: number) => sec < 60 ? `${Math.round(sec)}с` : sec < 3600 ? `${Math.round(sec / 60)}м` : `${(sec / 3600).toFixed(1)}ч`
+export const fmtCost = (c: number) => !c ? '$0' : c < 0.01 ? '$' + c.toFixed(4) : '$' + c.toFixed(2)

@@ -40,11 +40,11 @@ var actionSchema = obj(map[string]any{
 }, "action")
 
 func work(ctx context.Context, s model.Step, feedback string) (result, error) {
-	if *harness == "claude" && *workdir != "" {
+	if prof.Harness == "claude" && *workdir != "" {
 		return runHarness(ctx, s, feedback)
 	}
 	if *workdir == "" {
-		return chat(ctx, *worker, workerSystem, workerPrompt(s, feedback), nil)
+		return chat(ctx, prof.Worker, workerSystem, workerPrompt(s, feedback), nil)
 	}
 	msgs := []msg{{"role": "system", "content": toolSystem}, {"role": "user", "content": workerPrompt(s, feedback)}}
 	var log strings.Builder
@@ -53,7 +53,7 @@ func work(ctx context.Context, s model.Step, feedback string) (result, error) {
 	fails := map[string]int{}
 	total := result{}
 	for range *maxActions {
-		r, err := chatMsgs(ctx, *worker, msgs, actionSchema)
+		r, err := chatMsgs(ctx, prof.Worker, msgs, actionSchema)
 		if err != nil {
 			return total, err
 		}
@@ -210,7 +210,7 @@ func writeFile(ctx context.Context, s model.Step, path string, files map[string]
 		fmt.Fprintf(&b, "=== %s ===\n%s\n\n", k, cut(v, 12000))
 	}
 	user := workerPrompt(s, "") + "\n\nИЗВЕСТНЫЕ ФАЙЛЫ И ВЫВОДЫ КОМАНД:\n" + b.String() + "\nНапиши полный текст файла " + path
-	r, err := chat(ctx, *worker, "Ты программист. Выведи только полное содержимое одного файла, без пояснений и без JSON.", user, nil)
+	r, err := chat(ctx, prof.Worker, "Ты программист. Выведи только полное содержимое одного файла, без пояснений и без JSON.", user, nil)
 	r.Text = stripFence(r.Text)
 	if strings.HasSuffix(path, ".go") {
 		if i := strings.Index(r.Text, "package "); i > 0 {

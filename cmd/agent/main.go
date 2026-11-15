@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -42,6 +43,7 @@ var (
 
 func main() {
 	flag.Parse()
+	loadProfiles()
 	if *workdir != "" {
 		*workdir, _ = filepath.Abs(*workdir)
 	}
@@ -141,13 +143,19 @@ func heartbeat() {
 	host, _ := os.Hostname()
 	for {
 		ok := false
-		if r, err := http.Get(*ollama + "/api/version"); err == nil {
+		tmu.Lock()
+		p := prof
+		tmu.Unlock()
+		req, _ := http.NewRequest("GET", strings.TrimRight(p.Worker.URL, "/")+"/models", nil)
+		if k := os.Getenv(p.Worker.KeyEnv); p.Worker.KeyEnv != "" && k != "" {
+			req.Header.Set("Authorization", "Bearer "+k)
+		}
+		if r, err := http.DefaultClient.Do(req); err == nil {
 			r.Body.Close()
-			ok = true
+			ok = r.StatusCode < 300
 		}
 		tmu.Lock()
-		a := model.Agent{Host: host, Awake: cafe != nil, Ollama: ok, TPS: lastTPS,
-			Models: map[string]string{"planner": *planner, "worker": *worker, "reviewer": *reviewer}}
+		a := model.Agent{Host: host, Awake: cafe != nil, Ollama: ok, TPS: lastTPS, Models: p.models(), Profiles: profileNames()}
 		if cur != nil {
 			a.TaskID = cur.ID
 		}
@@ -236,14 +244,16 @@ func apply(t *model.Task, c model.Command) {
 func run(t *model.Task) {
 	tmu.Lock()
 	cur = t
+	prof = pickProfile(t.Profile)
 	tmu.Unlock()
+	update(func(t *model.Task) { t.Profile, t.Models = prof.Name, prof.models() })
 	keepAwake(true)
 	defer keepAwake(false)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go pollCommands(ctx, cancel)
 
-	emit("", "start", "взял задачу: %s", t.Goal)
+	emit("", "start", "взял задачу (профиль %s): %s", prof.Name, t.Goal)
 	if len(t.Steps) == 0 {
 		update(func(t *model.Task) { t.Status = "planning" })
 		steps, err := plan(ctx, t.Goal)
@@ -317,6 +327,9 @@ func doStep(ctx context.Context, i int) {
 		}
 		emit(s.ID, "attempt", "«%s»: попытка %d", s.Title, try)
 		a := model.Attempt{N: len(s.Attempts) + 1, Started: time.Now()}
+		tmu.Lock()
+		in0, out0, cost0 := cur.TokensIn, cur.TokensOut, cur.Cost
+		tmu.Unlock()
 		res, err := work(ctx, s, feedback)
 		if err != nil {
 			emit(s.ID, "error", "исполнитель: %v", err)
@@ -324,7 +337,7 @@ func doStep(ctx context.Context, i int) {
 		}
 		chk, ok := runCheck()
 		res.Text += chk
-		a.Output, a.Tokens, a.TPS = res.Text, res.Tokens, res.TPS
+		a.Output, a.TPS = res.Text, res.TPS
 		r, err := review(ctx, s, res.Text)
 		if err != nil {
 			emit(s.ID, "error", "проверяющий: %v", err)
@@ -335,6 +348,9 @@ func doStep(ctx context.Context, i int) {
 			r.Feedback = "Проверка `" + *check + "` не прошла. " + r.Feedback
 		}
 		a.Review, a.Finished = r, time.Now()
+		tmu.Lock()
+		a.TokensIn, a.Tokens, a.Cost = cur.TokensIn-in0, cur.TokensOut-out0, cur.Cost-cost0
+		tmu.Unlock()
 		s.Attempts = append(s.Attempts, a)
 		update(func(t *model.Task) { t.Steps[i].Attempts = append(t.Steps[i].Attempts, a) })
 		emit(s.ID, "review", "оценка %d/10: %s", r.Score, r.Feedback)

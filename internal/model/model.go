@@ -15,6 +15,8 @@ type Attempt struct {
 	Started  time.Time `json:"started"`
 	Finished time.Time `json:"finished"`
 	Tokens   int       `json:"tokens"`
+	TokensIn int       `json:"tokens_in"`
+	Cost     float64   `json:"cost"` // $ за попытку вместе с проверкой
 	TPS      float64   `json:"tps"`
 }
 
@@ -28,16 +30,21 @@ type Step struct {
 }
 
 type Task struct {
-	ID       string    `json:"id"`
-	Goal     string    `json:"goal"`
-	Status   string    `json:"status"` // queued planning running paused done failed canceled
-	Progress float64   `json:"progress"`
-	Score    int       `json:"score"`
-	Summary  string    `json:"summary"`
-	Round    int       `json:"round"`
-	Steps    []Step    `json:"steps"`
-	Created  time.Time `json:"created"`
-	Updated  time.Time `json:"updated"`
+	ID        string            `json:"id"`
+	Goal      string            `json:"goal"`
+	Status    string            `json:"status"` // queued planning running paused done failed canceled
+	Progress  float64           `json:"progress"`
+	Score     int               `json:"score"`
+	Summary   string            `json:"summary"`
+	Round     int               `json:"round"`
+	Profile   string            `json:"profile"`
+	Models    map[string]string `json:"models,omitempty"` // чем реально выполнялась
+	TokensIn  int               `json:"tokens_in"`
+	TokensOut int               `json:"tokens_out"`
+	Cost      float64           `json:"cost"`
+	Steps     []Step            `json:"steps"`
+	Created   time.Time         `json:"created"`
+	Updated   time.Time         `json:"updated"`
 }
 
 type Event struct {
@@ -58,13 +65,14 @@ type Command struct {
 }
 
 type Agent struct {
-	Host   string            `json:"host"`
-	Awake  bool              `json:"awake"`
-	Ollama bool              `json:"ollama"`
-	Models map[string]string `json:"models"`
-	TaskID string            `json:"task_id"`
-	TPS    float64           `json:"tps"`
-	Seen   time.Time         `json:"seen"`
+	Host     string            `json:"host"`
+	Awake    bool              `json:"awake"`
+	Ollama   bool              `json:"ollama"` // API исполнителя отвечает
+	Profiles []string          `json:"profiles"`
+	Models   map[string]string `json:"models"`
+	TaskID   string            `json:"task_id"`
+	TPS      float64           `json:"tps"`
+	Seen     time.Time         `json:"seen"`
 }
 
 func (t *Task) Recalc() {
